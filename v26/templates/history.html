@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="hero"><h1>History</h1><p>Completed sessions remain here even after a course reaches 100% and is removed from Courses.</p></section>
+<section class="panel table-wrap"><table><thead><tr><th>Date</th><th>Course</th><th>Chapter</th><th>Title</th><th>Study Time</th><th>Progress</th></tr></thead><tbody id="history"></tbody></table></section>
+{% endblock %}
+{% block scripts %}<script>initHistory();</script>{% endblock %}

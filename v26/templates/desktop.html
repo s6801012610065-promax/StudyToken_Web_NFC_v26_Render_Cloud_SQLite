@@ -1,0 +1,52 @@
+{% extends 'base.html' %}{% block content %}
+<section class="hero"><h1>StudyToken Cloud Admin</h1><p class="muted">โหมด Cloud ไม่สามารถเข้าถึง PN532/COM ที่ต่อกับคอมพิวเตอร์ได้</p></section>
+{% if cloud_mode %}
+<section class="panel desktop-reader">
+  <div class="status">● Cloud mode — PN532 disabled</div>
+  <p>Render ไม่สามารถเข้าถึงเครื่องอ่าน NFC ที่ต่อ USB/COM กับคอมพิวเตอร์ได้</p>
+  <p>สร้าง Course เพื่อรับ Public URL แล้วนำ URL ไปเขียนลง NFC Tag ด้วยอุปกรณ์ที่รองรับ หรือใช้ QR Code</p>
+</section>
+{% else %}
+<section class="panel desktop-reader">
+<div class="status" id="readerStatus">● {{ nfc.status }}</div>
+<div class="grid two">
+<div><div class="label">READER</div><div class="big-small">PN532</div></div>
+<div><div class="label">PORT</div><div id="readerPort" class="big-small">{{ nfc.port or '-' }}</div></div>
+</div>
+<div class="nfc-note">Last UID: <strong id="lastUid">{{ nfc.last_uid or '-' }}</strong><br>Last seen: <strong id="lastSeen">{{ nfc.last_seen or '-' }}</strong></div>
+<div id="readerError" class="muted"></div>
+</section>
+{% endif %}
+<section class="panel">
+<div class="section-title">NFC Verification</div>
+<div class="field-with-action">
+<input id="verifyInput" placeholder="NFC UID">
+<button id="verifyScanBtn" class="btn" type="button">Scan NFC</button>
+<button id="verifyBtn" class="btn primary" type="button">Search</button>
+</div>
+<div id="verifyResult" class="verify-result"></div>
+</section>
+<section class="panel">
+<div class="section-title">Add Course</div>
+<form id="desktopAddForm" class="form grid two">
+<input name="subject_code" placeholder="Course ID (ex. 0101231XX)" required>
+<input name="name" placeholder="Course Name (ex. Softdev, etc.)" required>
+<input name="chapter" placeholder="Chapter เช่น 1 / ๑ / IV" required>
+<input name="title" placeholder="Title" required>
+<input name="duration" type="number" min="1" placeholder="Time (minutes)" required>
+<div class="field-with-action">
+<input class="nfc-token-display" value="NFC Token will appear automatically" readonly>
+<input name="nfc_token" type="hidden">
+<button class="btn primary generate-token" type="button">Generate NFC Token</button>
+</div>
+<div class="field-with-action">
+<input class="nfc-uid-display" value="Scan NFC (optional) เพื่อเขียน URL ทันทีตอน Save" readonly>
+<input name="nfc_uid" type="hidden">
+<button class="btn scan-uid" type="button">Scan NFC</button>
+</div>
+<div class="save-course-row"><button class="btn primary" type="submit">Save Course</button><span class="scan-hint">Scan NFC</span></div>
+</form>
+<div class="form-msg muted"></div>
+</section>
+{% endblock %}
+{% block scripts %}<script>initDesktop();</script>{% endblock %}

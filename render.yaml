@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: studytoken-web
+    runtime: python
+    plan: starter
+    region: singapore
+    rootDir: v26
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 app:app
+    healthCheckPath: /health
+    envVars:
+      - key: STUDYTOKEN_CLOUD_MODE
+        value: "1"
+      - key: STUDYTOKEN_DB
+        value: /var/data/study_token.db
+    disk:
+      name: study-token-data
+      mountPath: /var/data
+      sizeGB: 1

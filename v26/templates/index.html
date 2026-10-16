@@ -1,0 +1,40 @@
+{% extends 'base.html' %}{% block content %}
+<section class="hero"><h1>Study Dashboard</h1></section>
+<div class="grid two">
+<section class="panel"><div class="label">TODAY'S STUDY TIME</div><div id="today" class="big">00m</div></section>
+<section class="panel"><div class="label">NFC / CLOUD</div><div class="big-small">Cloud URL · NFC Token</div><div class="muted">เปิด Course ผ่าน URL ของ Render ได้โดยตรง หากต้องใช้ NFC Tag ให้เขียน URL ลง Tag ด้วยอุปกรณ์ที่รองรับ</div></section>
+</div>
+<section class="panel">
+<div class="section-title">NFC Verification</div>
+<div class="field-with-action">
+<input id="verifyInput" placeholder="NFC UID">
+{% if not cloud_mode %}<button id="verifyScanBtn" class="btn" type="button">Scan NFC</button>{% endif %}
+<button id="verifyBtn" class="btn primary" type="button">Search</button>
+</div>
+<div id="verifyResult" class="verify-result"></div>
+</section>
+<section class="panel"><div class="section-title">Courses</div><div id="courses" class="course-list"></div></section>
+<section class="panel">
+<div class="section-title">Add Course</div>
+<form id="addForm" class="form grid two">
+<input name="subject_code" placeholder="Course ID (ex. 0101231XX)" required>
+<input name="name" placeholder="Course Name (ex. Softdev, etc.)" required>
+<input name="chapter" placeholder="Chapter เช่น 1 / ๑ / IV" required>
+<input name="title" placeholder="Title" required>
+<input name="duration" type="number" min="1" placeholder="Time (minutes)" required>
+<div class="field-with-action">
+<input class="nfc-token-display" value="NFC Token will appear automatically" readonly>
+<input name="nfc_token" type="hidden">
+<button class="btn primary generate-token" type="button">Generate NFC Token</button>
+</div>
+<div class="field-with-action">
+<input class="nfc-uid-display" value="Scan NFC (optional) เพื่อเขียน URL ทันทีตอน Save" readonly>
+<input name="nfc_uid" type="hidden">
+<button class="btn scan-uid" type="button">Scan NFC</button>
+</div>
+<div class="save-course-row"><button class="btn primary" type="submit">Save Course</button><span class="scan-hint">Scan NFC</span></div>
+</form>
+<div class="form-msg muted"></div>
+</section>
+{% endblock %}
+{% block scripts %}<script>initDashboard();</script>{% endblock %}

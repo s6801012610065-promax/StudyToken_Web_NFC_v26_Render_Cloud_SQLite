@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>StudyToken Web</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div><div class="brand">STUDY TOKEN</div><div class="sub">NFC-powered learning</div></div>
+  <nav><a href="/">Dashboard</a><a href="/history">History</a></nav>
+</header>
+<main class="container">{% block content %}{% endblock %}</main>
+<script>window.STUDYTOKEN_CLOUD_MODE = {{ cloud_mode|tojson }};</script>
+  <script src="{{ url_for('static', filename='app.js', v='26-render') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
