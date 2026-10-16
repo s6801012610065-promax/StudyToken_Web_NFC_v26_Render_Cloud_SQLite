@@ -1,15 +1,11 @@
 services:
   - type: web
-    name: studytoken-web
+    name: studytoken
     runtime: python
     plan: free
-    region: singapore
-    rootDir: v26
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 app:app
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4
     healthCheckPath: /health
     envVars:
-      - key: STUDYTOKEN_CLOUD_MODE
-        value: "1"
-      - key: STUDYTOKEN_DB
-        value: /tmp/study_token.db
+      - key: PYTHON_VERSION
+        value: 3.12.3

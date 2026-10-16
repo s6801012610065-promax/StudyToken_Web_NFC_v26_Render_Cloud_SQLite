@@ -12,8 +12,7 @@
   <nav><a href="/">Dashboard</a><a href="/history">History</a></nav>
 </header>
 <main class="container">{% block content %}{% endblock %}</main>
-<script>window.STUDYTOKEN_CLOUD_MODE = {{ cloud_mode|tojson }};</script>
-  <script src="{{ url_for('static', filename='app.js', v='26-render') }}"></script>
+<script src="{{ url_for('static', filename='app.js', v='14') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

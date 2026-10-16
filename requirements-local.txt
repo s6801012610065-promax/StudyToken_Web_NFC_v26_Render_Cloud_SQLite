@@ -1,0 +1,3 @@
+-r requirements.txt
+# Only for running on your own PC with a PN532 reader (not needed on Render)
+nfcpy>=1.0.4

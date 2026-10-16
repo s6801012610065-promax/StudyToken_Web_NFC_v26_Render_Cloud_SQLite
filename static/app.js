@@ -3,23 +3,15 @@ function fmtToday(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/36
 async function getJSON(url,opts){const r=await fetch(url,opts);const j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
 function numberNormalize(v){let s=String(v??'').trim().toUpperCase().replace(/\s+/g,'');s=s.replace(/[๐-๙]/g,c=>'๐๑๒๓๔๕๖๗๘๙'.indexOf(c));if(/^\d+$/.test(s))return String(Number(s));if(!/^[IVXLCDM]+$/.test(s))return '';const vals={I:1,V:5,X:10,L:50,C:100,D:500,M:1000};let t=0,p=0;for(let i=s.length-1;i>=0;i--){let n=vals[s[i]];t+=n<p?-n:n;p=Math.max(p,n)}return String(t)}
 let nfcPairingActive=false;
-const STUDYTOKEN_CLOUD_MODE = window.STUDYTOKEN_CLOUD_MODE === true;
 function setupCourseForm(form,opts){
  const code=form.querySelector('[name="subject_code"]'),name=form.querySelector('[name="name"]'),chapter=form.querySelector('[name="chapter"]'),title=form.querySelector('[name="title"]'),duration=form.querySelector('[name="duration"]'),generate=form.querySelector('.generate-token'),uid=form.querySelector('[name="nfc_uid"]'),token=form.querySelector('[name="nfc_token"]'),tokenDisplay=form.querySelector('.nfc-token-display'),msg=form.querySelector('.form-msg'),submit=form.querySelector('button[type="submit"]'),scanHint=form.querySelector('.scan-hint'),scanUidBtn=form.querySelector('.scan-uid'),uidDisplay=form.querySelector('.nfc-uid-display');
  let linking=false,scanningUid=false;
- const UID_IDLE_TEXT=STUDYTOKEN_CLOUD_MODE?'Cloud mode: ใช้ URL ของ Course ไปเขียนลง Tag ด้วยอุปกรณ์ NFC ที่รองรับ':'Scan NFC (optional) เพื่อเขียน URL ทันทีตอน Save';
- if(STUDYTOKEN_CLOUD_MODE){
-   if(scanUidBtn)scanUidBtn.style.display='none';
-   if(uidDisplay){uidDisplay.value=UID_IDLE_TEXT;uidDisplay.readOnly=true;}
-   if(uid)uid.disabled=true;
-   if(scanHint)scanHint.textContent='เขียน URL ลง NFC Tag ด้วยอุปกรณ์ที่รองรับ';
- }
+ const UID_IDLE_TEXT='Scan NFC (optional) เพื่อเขียน URL ทันทีตอน Save';
 
  // Same principle as v9: let the user scan the physical NFC tag BEFORE
  // saving. If a UID is already captured here, Save Course links it and
  // writes the URL to the tag in the same request (see submit handler).
  async function scanUidNow(){
-   if(STUDYTOKEN_CLOUD_MODE){if(msg)msg.textContent='Cloud mode ไม่มี PN532/COM ให้สแกนบน Render กรุณาใช้ URL ของ Course เพื่อเขียนลง NFC Tag ด้วยอุปกรณ์ที่รองรับ';return;}
    if(scanningUid)return;
    scanningUid=true; nfcPairingActive=true;
    if(scanUidBtn)scanUidBtn.disabled=true;
@@ -66,7 +58,7 @@ function setupCourseForm(form,opts){
      if(!x?.nfc_token) throw new Error('server returned no token');
      if(token) token.value=x.nfc_token;
      if(tokenDisplay) tokenDisplay.value=x.nfc_token;
-     if(msg && !linking) msg.textContent=STUDYTOKEN_CLOUD_MODE?'NFC Token พร้อมแล้ว กด Save Course เพื่อสร้าง URL บน Render':'NFC Token generated. กด Save Course ก่อน แล้วจึงสแกน NFC เพื่อเชื่อม UID กับ Token';
+     if(msg && !linking) msg.textContent='NFC Token generated. กด Save Course ก่อน แล้วจึงสแกน NFC เพื่อเชื่อม UID กับ Token';
    }catch(e){
      // Fallback from v15: generate a valid token locally if the server is unavailable.
      const bytes=new Uint8Array(4);
@@ -75,7 +67,7 @@ function setupCourseForm(form,opts){
      const local='STK-'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
      if(token) token.value=local;
      if(tokenDisplay) tokenDisplay.value=local;
-     if(msg && !linking) msg.textContent=STUDYTOKEN_CLOUD_MODE?'NFC Token พร้อมแล้ว กด Save Course เพื่อสร้าง URL บน Render':'NFC Token generated locally. กด Save Course ก่อน แล้วจึงสแกน NFC เพื่อเชื่อม UID กับ Token';
+     if(msg && !linking) msg.textContent='NFC Token generated locally. กด Save Course ก่อน แล้วจึงสแกน NFC เพื่อเชื่อม UID กับ Token';
    }finally{
      if(generate) generate.disabled=false;
    }
@@ -101,17 +93,6 @@ function setupCourseForm(form,opts){
  }
 
  async function linkNfcToToken(saved){
-   if(STUDYTOKEN_CLOUD_MODE){
-     const url=saved.nfc_url||`${location.origin}/nfc/${saved.nfc_token}`;
-     if(opts.afterLink)opts.afterLink(saved);
-     form.reset();name.readOnly=false;chapter.readOnly=false;
-     if(token)token.value='';if(uid)uid.value='';
-     if(tokenDisplay)tokenDisplay.value='NFC Token will appear automatically';
-     if(uidDisplay)uidDisplay.value=UID_IDLE_TEXT;
-     await generateToken();
-     if(msg)msg.innerHTML=`บันทึก Course สำเร็จ<br>Token: <strong>${escapeHtml(saved.nfc_token)}</strong><br>URL สำหรับเขียนลง NFC Tag:<br><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>`;
-     return;
-   }
    linking=true; nfcPairingActive=true;
    if(submit)submit.disabled=true;
    if(generate)generate.disabled=true;
@@ -320,9 +301,7 @@ function initVerify(){
  }
  btn.onclick=()=>runVerify(input.value);
  input?.addEventListener('keydown',e=>{if(e.key==='Enter')runVerify(input.value)});
- if(STUDYTOKEN_CLOUD_MODE && scanBtn)scanBtn.style.display='none';
  scanBtn?.addEventListener('click',async()=>{
-   if(STUDYTOKEN_CLOUD_MODE){result.innerHTML='<div class="muted">Cloud mode: ค้นหาด้วย NFC Token หรือ UID ที่มีอยู่แล้ว ไม่สามารถสแกนแท็กผ่าน Render ได้</div>';return;}
    if(scanning)return;
    scanning=true; nfcPairingActive=true; scanBtn.disabled=true;
    result.innerHTML='<div class="muted">กรุณาแตะ NFC Tag เพื่อตรวจสอบ...</div>';
@@ -357,7 +336,7 @@ function initVerify(){
 function initHistory(){loadHistory();startNfcPageWatcher({redirectOnPaired:true})}
 async function loadHistory(){const rows=await getJSON('/api/history');const body=document.getElementById('history');if(!body)return;body.innerHTML='';rows.forEach(s=>{const tr=document.createElement('tr');const mins=Math.max(0,Number(s.end_position||0)-Number(s.start_position||0))/60;tr.innerHTML=`<td>${escapeHtml(s.started||'-')}</td><td>${escapeHtml(s.name||'-')}</td><td>${escapeHtml(s.chapter||'-')}</td><td>${escapeHtml(s.title||'-')}</td><td>${Math.floor(mins)} min</td><td>${fmt(s.start_position||0)} → ${fmt(s.end_position||0)}</td>`;body.appendChild(tr)})}
 function updateReaderTop(x){const st=document.getElementById('readerStatus');if(st)st.textContent='● '+(x?.status||'UNKNOWN');const port=document.getElementById('readerPort');if(port)port.textContent=x?.port||'-';const uid=document.getElementById('lastUid');if(uid)uid.textContent=x?.last_uid||'-';const seen=document.getElementById('lastSeen');if(seen)seen.textContent=x?.last_seen||'-';const err=document.getElementById('readerError');if(err){err.textContent='';err.style.display='none'}}
-function startNfcPageWatcher({redirectOnPaired=true}={}){if(STUDYTOKEN_CLOUD_MODE)return;let initialized=false,lastEvent=-1;const poll=async()=>{try{const x=await getJSON('/api/nfc/status');updateReaderTop(x);const eventId=Number(x.event_id??-1),pairEventId=Number(x.pair_event_id??-2);if(!initialized){initialized=true;lastEvent=eventId}else if(eventId>lastEvent){lastEvent=eventId;if(nfcPairingActive||x.pairing||eventId===pairEventId){}else if(x.last_uid){try{const r=await getJSON('/api/nfc/resolve/'+encodeURIComponent(x.last_uid));if(redirectOnPaired){location.href='/nfc/'+encodeURIComponent(r.nfc_token)+'?source=desktop';return}}catch(e){alert('NFC นี้ยังไม่ได้ผูกกับ Token')}}}}catch(e){}setTimeout(poll,500)};poll()}
+function startNfcPageWatcher({redirectOnPaired=true}={}){let initialized=false,lastEvent=-1;const poll=async()=>{try{const x=await getJSON('/api/nfc/status');updateReaderTop(x);const eventId=Number(x.event_id??-1),pairEventId=Number(x.pair_event_id??-2);if(!initialized){initialized=true;lastEvent=eventId}else if(eventId>lastEvent){lastEvent=eventId;if(nfcPairingActive||x.pairing||eventId===pairEventId){}else if(x.last_uid){try{const r=await getJSON('/api/nfc/resolve/'+encodeURIComponent(x.last_uid));if(redirectOnPaired){location.href='/nfc/'+encodeURIComponent(r.nfc_token)+'?source=desktop';return}}catch(e){alert('NFC นี้ยังไม่ได้ผูกกับ Token')}}}}catch(e){}setTimeout(poll,500)};poll()}
 function initDesktop(){const f=document.getElementById('desktopAddForm');if(f)setupCourseForm(f,{});initVerify();startNfcPageWatcher({redirectOnPaired:true})}
 // ===== Chapter Section Timeline =====
 function fmtDur(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return h?`${h}h ${m}m`:(m?`${m}m ${String(s).padStart(2,'0')}s`:`${s}s`)}

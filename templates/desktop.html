@@ -1,12 +1,5 @@
 {% extends 'base.html' %}{% block content %}
-<section class="hero"><h1>StudyToken Cloud Admin</h1><p class="muted">โหมด Cloud ไม่สามารถเข้าถึง PN532/COM ที่ต่อกับคอมพิวเตอร์ได้</p></section>
-{% if cloud_mode %}
-<section class="panel desktop-reader">
-  <div class="status">● Cloud mode — PN532 disabled</div>
-  <p>Render ไม่สามารถเข้าถึงเครื่องอ่าน NFC ที่ต่อ USB/COM กับคอมพิวเตอร์ได้</p>
-  <p>สร้าง Course เพื่อรับ Public URL แล้วนำ URL ไปเขียนลง NFC Tag ด้วยอุปกรณ์ที่รองรับ หรือใช้ QR Code</p>
-</section>
-{% else %}
+<section class="hero"><h1>Desktop NFC Reader</h1></section>
 <section class="panel desktop-reader">
 <div class="status" id="readerStatus">● {{ nfc.status }}</div>
 <div class="grid two">
@@ -16,7 +9,6 @@
 <div class="nfc-note">Last UID: <strong id="lastUid">{{ nfc.last_uid or '-' }}</strong><br>Last seen: <strong id="lastSeen">{{ nfc.last_seen or '-' }}</strong></div>
 <div id="readerError" class="muted"></div>
 </section>
-{% endif %}
 <section class="panel">
 <div class="section-title">NFC Verification</div>
 <div class="field-with-action">

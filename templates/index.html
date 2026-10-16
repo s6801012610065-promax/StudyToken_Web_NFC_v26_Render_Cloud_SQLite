@@ -2,13 +2,13 @@
 <section class="hero"><h1>Study Dashboard</h1></section>
 <div class="grid two">
 <section class="panel"><div class="label">TODAY'S STUDY TIME</div><div id="today" class="big">00m</div></section>
-<section class="panel"><div class="label">NFC / CLOUD</div><div class="big-small">Cloud URL · NFC Token</div><div class="muted">เปิด Course ผ่าน URL ของ Render ได้โดยตรง หากต้องใช้ NFC Tag ให้เขียน URL ลง Tag ด้วยอุปกรณ์ที่รองรับ</div></section>
+<section class="panel"><div class="label">NFC</div><div class="big-small">PN532 · Auto COM Scan</div><div class="muted">ระบบค้นหา PN532 อัตโนมัติและอัปเดตสถานะแบบ Realtime</div></section>
 </div>
 <section class="panel">
 <div class="section-title">NFC Verification</div>
 <div class="field-with-action">
 <input id="verifyInput" placeholder="NFC UID">
-{% if not cloud_mode %}<button id="verifyScanBtn" class="btn" type="button">Scan NFC</button>{% endif %}
+<button id="verifyScanBtn" class="btn" type="button">Scan NFC</button>
 <button id="verifyBtn" class="btn primary" type="button">Search</button>
 </div>
 <div id="verifyResult" class="verify-result"></div>

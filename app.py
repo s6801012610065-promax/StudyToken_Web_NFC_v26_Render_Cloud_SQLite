@@ -4,11 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 
-CLOUD_MODE = os.environ.get('STUDYTOKEN_CLOUD_MODE', '').strip().lower() in {'1', 'true', 'yes'} or bool(os.environ.get('RENDER'))
-
 try:
-    if CLOUD_MODE:
-        raise ImportError('NFC reader is disabled in cloud mode; physical PN532/COM ports are not available on Render.')
     from nfc_reader import start_nfc_reader, get_state as get_nfc_state, start_pairing, cancel_pairing, request_nfc_url_write
 except Exception:
     start_nfc_reader = None
@@ -18,17 +14,10 @@ except Exception:
     get_nfc_state = lambda: {"available": False, "status": "DISABLED", "port": None, "last_uid": None, "last_seen": None, "last_error": "nfc_reader.py unavailable", "event_id": 0}
 
 BASE_DIR=Path(__file__).resolve().parent
-# On Render, use the persistent disk mounted at /var/data. Locally, keep the
-# original database under ./data. Set STUDYTOKEN_DB to override either path.
-DEFAULT_DB_PATH = Path('/var/data/study_token.db') if os.environ.get('RENDER') else BASE_DIR/'data'/'study_token.db'
-DB_PATH=Path(os.environ.get('STUDYTOKEN_DB', DEFAULT_DB_PATH))
+DB_PATH=Path(os.environ.get('STUDYTOKEN_DB', BASE_DIR/'data'/'study_token.db'))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 app=Flask(__name__)
 app.config['JSON_SORT_KEYS']=False
-
-@app.context_processor
-def inject_deployment_config():
-    return {'cloud_mode': CLOUD_MODE}
 
 def now_str(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -155,8 +144,10 @@ def insert_section(conn, s, c, start_pos, end_pos, description, is_auto=0, clien
 def progress(c): return min(100,int(int(c['position'])*100/max(1,int(c['duration']))))
 
 def get_nfc_base_url(port=None):
-    configured=(os.environ.get('BASE_URL') or os.environ.get('RENDER_EXTERNAL_URL') or '').strip().rstrip('/')
+    configured=os.environ.get('BASE_URL','').strip().rstrip('/')
     if configured: return configured
+    render_url=os.environ.get('RENDER_EXTERNAL_URL','').strip().rstrip('/')
+    if render_url: return render_url
     port=port or int(os.environ.get('PORT','5000'))
     ip='127.0.0.1'; sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
     try: sock.connect(('8.8.8.8',80)); ip=sock.getsockname()[0] or ip
@@ -357,7 +348,7 @@ def api_add_course():
         'nfc_url':nfc_url,
         'nfc_write_status':write_status,
         'nfc_write_error':write_error,
-        'message':('Course saved and URL written to the scanned NFC tag.' if uid else ('Course saved. Copy nfc_url and write it to an NFC tag using a compatible NFC-writing device.' if CLOUD_MODE else 'Course saved. Now scan an NFC Tag to link its UID to this NFC Token.'))
+        'message':('Course saved and URL written to the scanned NFC tag.' if uid else 'Course saved. Now scan an NFC Tag to link its UID to this NFC Token.')
     })
 
 
@@ -526,7 +517,7 @@ def api_course_timeline(course_id):
     return jsonify({'course':{k:x[k] for k in ('id','subject_code','name','chapter','title','duration','position')},'sections':secs,'count':len(secs),'total_seconds':sum(int(r['duration']) for r in secs)})
 
 @app.get('/api/config')
-def api_config(): return jsonify({'base_url':get_nfc_base_url(),'nfc':get_nfc_state(),'cloud_mode':CLOUD_MODE})
+def api_config(): return jsonify({'base_url':get_nfc_base_url(),'nfc':get_nfc_state()})
 @app.get('/api/nfc/status')
 def api_nfc_status(): return jsonify(get_nfc_state())
 @app.get('/api/nfc/verify/<query>')
@@ -553,20 +544,16 @@ def api_nfc_resolve(uid):
     return jsonify({'paired':True,'uid':uid,'nfc_token':c['nfc_token'],'course':row_dict(c)})
 @app.post('/api/nfc/pair/start')
 def api_nfc_pair_start():
-    if CLOUD_MODE: return jsonify({'error':'Cloud mode: no PN532 reader is attached. Write the course URL to the NFC tag using a compatible NFC-writing device/app.'}),503
     start_pairing()
     return jsonify({'ok':True,'message':'Pairing mode started. Tap one NFC tag on the PN532.'})
 @app.post('/api/nfc/pair/cancel')
-def api_nfc_pair_cancel():
-    if CLOUD_MODE: return jsonify({'ok':True,'cloud_mode':True})
-    cancel_pairing(); return jsonify({'ok':True})
+def api_nfc_pair_cancel(): cancel_pairing(); return jsonify({'ok':True})
 @app.get('/health')
 def health(): return {'ok':True,'time':now_str()}
 
 init_db()
 if __name__=='__main__':
     host=os.environ.get('HOST','0.0.0.0'); port=int(os.environ.get('PORT','5000')); base_url=get_nfc_base_url(port)
-    if not CLOUD_MODE and start_nfc_reader: start_nfc_reader(base_url)
-    if not CLOUD_MODE:
-        threading.Thread(target=lambda: (_time.sleep(1.2), webbrowser.open(f'{base_url}/desktop')),daemon=True).start()
+    if start_nfc_reader: start_nfc_reader(base_url)
+    threading.Thread(target=lambda: (_time.sleep(1.2), webbrowser.open(f'{base_url}/desktop')),daemon=True).start()
     app.run(host=host,port=port,debug=False)
