@@ -2,7 +2,7 @@ services:
   - type: web
     name: studytoken-web
     runtime: python
-    plan: starter
+    plan: free
     region: singapore
     rootDir: v26
     buildCommand: pip install -r requirements.txt
@@ -12,4 +12,4 @@ services:
       - key: STUDYTOKEN_CLOUD_MODE
         value: "1"
       - key: STUDYTOKEN_DB
-        value: /var/data/study_token.db
+        value: /tmp/study_token.db
