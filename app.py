@@ -1,23 +1,41 @@
 from __future__ import annotations
-import os, sqlite3, uuid, threading, re, socket, webbrowser, time as _time
+import os, uuid, threading, re, socket, webbrowser, time as _time, logging
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
+import database
+from database import gmax
 
-try:
-    from nfc_reader import start_nfc_reader, get_state as get_nfc_state, start_pairing, cancel_pairing, request_nfc_url_write
-except Exception:
-    start_nfc_reader = None
-    request_nfc_url_write = lambda uid, target_url, wait_seconds=8.0: {"available": False, "write_status": "NFC_UNAVAILABLE", "write_error": "nfc_reader.py unavailable"}
-    start_pairing = lambda: None
-    cancel_pairing = lambda: None
-    get_nfc_state = lambda: {"available": False, "status": "DISABLED", "port": None, "last_uid": None, "last_seen": None, "last_error": "nfc_reader.py unavailable", "event_id": 0}
+# NFC backend:
+#   bridge (default on Render): the PN532 is on a Windows PC and reaches this server through the Local NFC Bridge.
+#   local  (default on your own PC): original behaviour, PN532 read directly through COM ports by nfc_reader.py.
+NFC_MODE=(os.environ.get('NFC_MODE') or ('bridge' if os.environ.get('RENDER') else 'local')).strip().lower()
+if NFC_MODE=='bridge':
+    from nfc_hub import get_state as get_nfc_state, start_pairing, cancel_pairing, request_nfc_url_write
+    start_nfc_reader=None
+else:
+    try:
+        from nfc_reader import start_nfc_reader, get_state as get_nfc_state, start_pairing, cancel_pairing, request_nfc_url_write
+    except Exception:
+        start_nfc_reader = None
+        request_nfc_url_write = lambda uid, target_url, wait_seconds=8.0: {"available": False, "write_status": "NFC_UNAVAILABLE", "write_error": "nfc_reader.py unavailable"}
+        start_pairing = lambda: None
+        cancel_pairing = lambda: None
+        get_nfc_state = lambda: {"available": False, "status": "DISABLED", "port": None, "last_uid": None, "last_seen": None, "last_error": "nfc_reader.py unavailable", "event_id": 0}
 
+logging.basicConfig(level=os.environ.get('LOG_LEVEL','INFO'),format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+log=logging.getLogger('studytoken')
 BASE_DIR=Path(__file__).resolve().parent
-DB_PATH=Path(os.environ.get('STUDYTOKEN_DB', BASE_DIR/'data'/'study_token.db'))
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 app=Flask(__name__)
 app.config['JSON_SORT_KEYS']=False
+if os.environ.get('TRUST_PROXY',('1' if os.environ.get('RENDER') else '0'))=='1':
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)   # Render terminates HTTPS in front of gunicorn
+import security
+security.install(app)
+if NFC_MODE=='bridge':
+    import bridge_api
+    app.register_blueprint(bridge_api.bp)
 
 def now_str(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -41,82 +59,11 @@ def normalize_number(value):
         else: total+=v; prev=v
     return str(total)
 
-def db():
-    c=sqlite3.connect(DB_PATH); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+def db(): return database.connect()
 
-def table_cols(conn, table): return {r[1] for r in conn.execute(f'PRAGMA table_info({table})')}
+def init_db(): database.init_db()
 
-def init_db():
-    conn=db()
-    conn.executescript('''
-    CREATE TABLE IF NOT EXISTS subjects (
-        code TEXT PRIMARY KEY,
-        name TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS courses (
-        id TEXT PRIMARY KEY,
-        subject_code TEXT,
-        name TEXT NOT NULL,
-        nfc_token TEXT UNIQUE,
-        tag_uid TEXT UNIQUE,
-        chapter TEXT,
-        title TEXT,
-        duration INTEGER NOT NULL DEFAULT 180,
-        position INTEGER NOT NULL DEFAULT 0,
-        state TEXT NOT NULL DEFAULT 'NOT_STARTED',
-        last_seen TEXT
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        course_id TEXT NOT NULL,
-        course_name TEXT,
-        chapter TEXT,
-        title TEXT,
-        started TEXT NOT NULL,
-        ended TEXT,
-        start_position INTEGER NOT NULL DEFAULT 0,
-        end_position INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS timeline_sections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        course_id TEXT NOT NULL,
-        session_id INTEGER,
-        subject_code TEXT,
-        chapter TEXT,
-        seq INTEGER NOT NULL,
-        study_date TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        start_position INTEGER NOT NULL,
-        end_position INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        description TEXT NOT NULL,
-        is_auto INTEGER NOT NULL DEFAULT 0,
-        client_id TEXT,
-        created TEXT NOT NULL,
-        UNIQUE(course_id, seq),
-        UNIQUE(session_id, client_id),
-        FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_timeline_course ON timeline_sections(course_id, seq);
-    ''')
-    cols=table_cols(conn,'courses')
-    migrations=[('subject_code','TEXT'),('nfc_token','TEXT')]
-    for col,typ in migrations:
-        if col not in cols: conn.execute(f'ALTER TABLE courses ADD COLUMN {col} {typ}')
-    # Existing v9 data: preserve UID pairing, give every course a token and use old Course ID as subject code.
-    cols=table_cols(conn,'courses')
-    for r in conn.execute('SELECT id,name,subject_code,nfc_token FROM courses').fetchall():
-        code=(r['subject_code'] or r['id']).strip()
-        token=r['nfc_token'] or ('STK-'+uuid.uuid4().hex[:8].upper())
-        conn.execute('UPDATE courses SET subject_code=?, nfc_token=? WHERE id=?',(code,token,r['id']))
-        conn.execute('INSERT INTO subjects(code,name) VALUES(?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name',(code,r['name']))
-    # Sessions already support snapshots in v9; add missing columns for older databases.
-    scols=table_cols(conn,'sessions')
-    for col,typ in [('course_name','TEXT'),('chapter','TEXT'),('title','TEXT'),('segment_started','TEXT')]:
-        if col not in scols: conn.execute(f'ALTER TABLE sessions ADD COLUMN {col} {typ}')
-    conn.execute('''UPDATE sessions SET course_name=(SELECT name FROM courses c WHERE c.id=sessions.course_id), chapter=(SELECT chapter FROM courses c WHERE c.id=sessions.course_id), title=(SELECT title FROM courses c WHERE c.id=sessions.course_id) WHERE course_name IS NULL''')
-    conn.commit(); conn.close()
-
+STAT_SECS=gmax('0','COALESCE(end_position,start_position)-start_position')
 def row_dict(r): return dict(r) if r else None
 
 # ---- Chapter Section Timeline helpers -------------------------------------
@@ -138,16 +85,14 @@ def segment_start_for(conn, s):
 def insert_section(conn, s, c, start_pos, end_pos, description, is_auto=0, client_id=None):
     started_at=s['segment_started'] or s['started']
     seq=conn.execute('SELECT COALESCE(MAX(seq),0)+1 FROM timeline_sections WHERE course_id=?',(c['id'],)).fetchone()[0]
-    cur=conn.execute('''INSERT INTO timeline_sections(course_id,session_id,subject_code,chapter,seq,study_date,started_at,start_position,end_position,duration,description,is_auto,client_id,created)
+    new_id=conn.insert_returning_id('''INSERT INTO timeline_sections(course_id,session_id,subject_code,chapter,seq,study_date,started_at,start_position,end_position,duration,description,is_auto,client_id,created)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(c['id'],s['id'],c['subject_code'],c['chapter'],seq,started_at[:10],started_at,start_pos,end_pos,end_pos-start_pos,description,1 if is_auto else 0,client_id,now_str()))
-    return conn.execute('SELECT * FROM timeline_sections WHERE id=?',(cur.lastrowid,)).fetchone()
+    return conn.execute('SELECT * FROM timeline_sections WHERE id=?',(new_id,)).fetchone()
 def progress(c): return min(100,int(int(c['position'])*100/max(1,int(c['duration']))))
 
 def get_nfc_base_url(port=None):
-    configured=os.environ.get('BASE_URL','').strip().rstrip('/')
+    configured=(os.environ.get('BASE_URL','').strip() or os.environ.get('RENDER_EXTERNAL_URL','').strip()).rstrip('/')
     if configured: return configured
-    render_url=os.environ.get('RENDER_EXTERNAL_URL','').strip().rstrip('/')
-    if render_url: return render_url
     port=port or int(os.environ.get('PORT','5000'))
     ip='127.0.0.1'; sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
     try: sock.connect(('8.8.8.8',80)); ip=sock.getsockname()[0] or ip
@@ -178,6 +123,7 @@ def nfc_open(token):
     course=get_course_by_token(token)
     if not course:
         return render_template('nfc_unknown.html',token=token),404
+    security.grant_course(course['id'])   # lets this browser use the study endpoints when APP_PASSWORD is enabled
     return render_template('study.html',course=row_dict(course),opened_from_nfc=True,source=request.args.get('source','mobile'))
 
 @app.post('/api/nfc/token/new')
@@ -194,11 +140,14 @@ def api_new_nfc_token():
 
 @app.get('/api/courses')
 def api_courses():
-    conn=db(); rows=conn.execute('SELECT * FROM courses ORDER BY subject_code, CAST(CASE WHEN chapter GLOB "[0-9]*" THEN chapter ELSE "0" END AS INTEGER), name').fetchall()
+    conn=db(); rows=conn.execute('SELECT * FROM courses').fetchall()
+    def _chap(r):
+        m=re.match(r'\d+',r['chapter'] or ''); return int(m.group()) if m else 0
+    rows=sorted(rows,key=lambda r:(r['subject_code'] or '',_chap(r),r['name'] or ''))   # same order as the old SQL, portable
     data=[]
     for r in rows:
         x=row_dict(r); x['progress']=progress(x)
-        stats=conn.execute('SELECT COUNT(*) AS cnt, COALESCE(SUM(MAX(0,COALESCE(end_position,start_position)-start_position)),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(x['id'],)).fetchone()
+        stats=conn.execute(f'SELECT COUNT(*) AS cnt, COALESCE(SUM({STAT_SECS}),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(x['id'],)).fetchone()
         x['sessions_count']=stats['cnt']; x['studied_seconds']=stats['secs']
         x['sections_count']=conn.execute('SELECT COUNT(*) FROM timeline_sections WHERE course_id=?',(x['id'],)).fetchone()[0]
         data.append(x)
@@ -210,7 +159,7 @@ def api_course_status(course_id):
     """Store status of course: how many times studied and total minutes watched."""
     conn=db(); c=conn.execute('SELECT * FROM courses WHERE id=?',(course_id,)).fetchone()
     if not c: conn.close(); return jsonify({'error':'course not found'}),404
-    stats=conn.execute('SELECT COUNT(*) AS cnt, COALESCE(SUM(MAX(0,COALESCE(end_position,start_position)-start_position)),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(course_id,)).fetchone()
+    stats=conn.execute(f'SELECT COUNT(*) AS cnt, COALESCE(SUM({STAT_SECS}),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(course_id,)).fetchone()
     sessions=conn.execute('SELECT started,ended,start_position,end_position FROM sessions WHERE course_id=? ORDER BY started DESC',(course_id,)).fetchall()
     conn.close()
     x=row_dict(c); x['progress']=progress(x)
@@ -254,7 +203,7 @@ def api_subject(code):
 
 @app.get('/api/history')
 def api_history():
-    conn=db(); rows=conn.execute('''SELECT s.*, COALESCE(s.course_name,c.name) AS name, COALESCE(s.chapter,c.chapter) AS chapter, COALESCE(s.title,c.title) AS title FROM sessions s LEFT JOIN courses c ON c.id=s.course_id WHERE s.ended IS NOT NULL ORDER BY s.started DESC''').fetchall(); conn.close(); return jsonify([row_dict(r) for r in rows])
+    conn=db(); rows=conn.execute('''SELECT s.id,s.course_id,s.course_name,s.started,s.ended,s.start_position,s.end_position,s.segment_started, COALESCE(s.course_name,c.name) AS name, COALESCE(s.chapter,c.chapter) AS chapter, COALESCE(s.title,c.title) AS title FROM sessions s LEFT JOIN courses c ON c.id=s.course_id WHERE s.ended IS NOT NULL ORDER BY s.started DESC''').fetchall(); conn.close(); return jsonify([row_dict(r) for r in rows])
 @app.get('/api/today')
 def api_today():
     day=datetime.now().strftime('%Y-%m-%d'); conn=db(); rows=conn.execute('SELECT start_position,COALESCE(end_position,start_position) AS end_position FROM sessions WHERE substr(started,1,10)=?',(day,)).fetchall(); conn.close(); return jsonify({'seconds':sum(max(0,int(r[1] or 0)-int(r[0] or 0)) for r in rows)})
@@ -320,8 +269,8 @@ def api_add_course():
             (course_id,code,name,token,uid or None,chapter,title,minutes*60)
         )
         conn.commit()
-    except sqlite3.IntegrityError as e:
-        conn.rollback(); conn.close(); return jsonify({'error':str(e)}),409
+    except database.IntegrityError as e:
+        conn.rollback(); conn.close(); return jsonify({'error':'Database constraint violated: '+str(e).splitlines()[0]}),409
     conn.close()
 
     nfc_url=f'{get_nfc_base_url()}/nfc/{token}'
@@ -408,8 +357,8 @@ def api_delete_course(course_id):
 def api_start_session():
     p=request.get_json(force=True); cid=p.get('course_id'); conn=db(); c=conn.execute('SELECT * FROM courses WHERE id=?',(cid,)).fetchone()
     if not c: conn.close(); return jsonify({'error':'course not found'}),404
-    stamp=now_str(); cur=conn.execute('INSERT INTO sessions(course_id,course_name,chapter,title,started,start_position,end_position,segment_started) VALUES(?,?,?,?,?,?,?,?)',(c['id'],c['name'],c['chapter'],c['title'],stamp,c['position'],c['position'],stamp))
-    conn.execute("UPDATE courses SET state='STUDYING',last_seen=? WHERE id=?",(stamp,cid)); conn.commit(); sid=cur.lastrowid; conn.close(); return jsonify({'session_id':sid,'course':row_dict(c)})
+    stamp=now_str(); sid=conn.insert_returning_id('INSERT INTO sessions(course_id,course_name,chapter,title,started,start_position,end_position,segment_started) VALUES(?,?,?,?,?,?,?,?)',(c['id'],c['name'],c['chapter'],c['title'],stamp,c['position'],c['position'],stamp))
+    conn.execute("UPDATE courses SET state='STUDYING',last_seen=? WHERE id=?",(stamp,cid)); conn.commit(); conn.close(); return jsonify({'session_id':sid,'course':row_dict(c)})
 
 @app.post('/api/sessions/<int:sid>/autosave')
 def api_autosave(sid):
@@ -422,11 +371,11 @@ def api_autosave(sid):
         conn.close(); return jsonify({'ok':True,'ignored':True,'position':int(s['end_position'] or 0),'completed':False})
     dr=conn.execute('SELECT duration FROM courses WHERE id=?',(s['course_id'],)).fetchone(); duration=int(dr[0]) if dr else max(pos,1); pos=min(pos,duration)
     # MAX(): progress only moves forward, so a delayed autosave can never roll back a saved section.
-    conn.execute('UPDATE sessions SET end_position=MAX(COALESCE(end_position,0),?) WHERE id=?',(pos,sid))
+    conn.execute(f"UPDATE sessions SET end_position={gmax('COALESCE(end_position,0)','?')} WHERE id=?",(pos,sid))
     if s['segment_started']:  # segment running
-        conn.execute("UPDATE courses SET position=MAX(position,?),state='STUDYING',last_seen=? WHERE id=?",(pos,stamp,s['course_id']))
+        conn.execute(f"UPDATE courses SET position={gmax('position','?')},state='STUDYING',last_seen=? WHERE id=?",(pos,stamp,s['course_id']))
     else:                     # paused after Save: keep the paused state
-        conn.execute("UPDATE courses SET position=MAX(position,?),last_seen=? WHERE id=?",(pos,stamp,s['course_id']))
+        conn.execute(f"UPDATE courses SET position={gmax('position','?')},last_seen=? WHERE id=?",(pos,stamp,s['course_id']))
     conn.commit(); conn.close(); return jsonify({'ok':True,'position':pos,'completed':pos>=duration})
 
 @app.post('/api/sessions/<int:sid>/sections')
@@ -439,7 +388,7 @@ def api_save_section(sid):
     try: pos=int(p.get('position'))
     except Exception: return jsonify({'error':'invalid position'}),400
     client_id=str(p.get('client_id','') or '').strip()[:64] or None
-    conn=db(); conn.execute('BEGIN IMMEDIATE')   # serialise concurrent saves: seq + segment start stay consistent
+    conn=db(); conn.begin_write()   # serialise concurrent saves: seq + segment start stay consistent
     s=conn.execute('SELECT * FROM sessions WHERE id=?',(sid,)).fetchone()
     if not s: conn.close(); return jsonify({'error':'session not found'}),404
     if client_id:  # same dialog confirmed twice (double click / retry) -> return the section already stored
@@ -456,15 +405,15 @@ def api_save_section(sid):
         conn.close(); return jsonify({'error':'No new study time since the last saved section.','code':'EMPTY_SEGMENT'}),409
     row=insert_section(conn,s,c,seg_start,pos,desc,0,client_id)
     stamp=now_str()
-    conn.execute('UPDATE sessions SET end_position=MAX(COALESCE(end_position,0),?),segment_started=NULL WHERE id=?',(pos,sid))
-    conn.execute("UPDATE courses SET position=MAX(position,?),state='IN_PROGRESS',last_seen=? WHERE id=?",(pos,stamp,c['id']))
+    conn.execute(f"UPDATE sessions SET end_position={gmax('COALESCE(end_position,0)','?')},segment_started=NULL WHERE id=?",(pos,sid))
+    conn.execute(f"UPDATE courses SET position={gmax('position','?')},state='IN_PROGRESS',last_seen=? WHERE id=?",(pos,stamp,c['id']))
     out={'ok':True,'duplicate':False,'section':row_dict(row),'sections':course_sections(conn,c['id']),'position':pos,'completed':pos>=int(c['duration'])}
     conn.commit(); conn.close(); return jsonify(out)
 
 @app.post('/api/sessions/<int:sid>/resume')
 def api_resume_session(sid):
     """Start timing the next segment after a Save. Paused time is never counted."""
-    conn=db(); conn.execute('BEGIN IMMEDIATE'); s=conn.execute('SELECT * FROM sessions WHERE id=?',(sid,)).fetchone()
+    conn=db(); conn.begin_write(); s=conn.execute('SELECT * FROM sessions WHERE id=?',(sid,)).fetchone()
     if not s: conn.close(); return jsonify({'error':'session not found'}),404
     if s['ended']: conn.close(); return jsonify({'error':'This study session is already finished.','code':'SESSION_FINISHED'}),409
     stamp=now_str()
@@ -474,7 +423,7 @@ def api_resume_session(sid):
     conn.commit(); conn.close(); return jsonify({'ok':True,'position':int(s['end_position'] or 0),'segment_started':s['segment_started'] or stamp})
 
 def finish_session(sid,pos,auto_section=True):
-    stamp=now_str(); conn=db(); conn.execute('BEGIN IMMEDIATE')
+    stamp=now_str(); conn=db(); conn.begin_write()
     s=conn.execute('SELECT * FROM sessions WHERE id=?',(sid,)).fetchone()
     if not s: conn.close(); return jsonify({'error':'session not found'}),404
     c=conn.execute('SELECT * FROM courses WHERE id=?',(s['course_id'],)).fetchone()
@@ -488,7 +437,7 @@ def finish_session(sid,pos,auto_section=True):
         if pos>seg_start:  # unsaved time left; nothing left (e.g. Finish right after Save) -> no empty/duplicate section
             section=row_dict(insert_section(conn,s,c,seg_start,pos,AUTO_SECTION_TEXT,1,None))
     conn.execute('UPDATE sessions SET course_name=?,chapter=?,title=?,ended=?,end_position=?,segment_started=NULL WHERE id=?',(c['name'],c['chapter'],c['title'],stamp,pos,sid))
-    conn.execute('UPDATE courses SET position=MAX(position,?),state=?,last_seen=? WHERE id=?',(pos,'FINISH' if completed else 'IN_PROGRESS',stamp,c['id']))
+    conn.execute(f"UPDATE courses SET position={gmax('position','?')},state=?,last_seen=? WHERE id=?",(pos,'FINISH' if completed else 'IN_PROGRESS',stamp,c['id']))
     conn.commit(); conn.close(); return jsonify({'ok':True,'completed':completed,'deleted':False,'section':section})
 
 def _pos_from_request():
@@ -531,7 +480,7 @@ def api_nfc_verify(query):
     if not course:
         return jsonify({'found':False,'query':q}),404
     conn=db()
-    stats=conn.execute('SELECT COUNT(*) AS cnt, COALESCE(SUM(MAX(0,COALESCE(end_position,start_position)-start_position)),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(course['id'],)).fetchone()
+    stats=conn.execute(f'SELECT COUNT(*) AS cnt, COALESCE(SUM({STAT_SECS}),0) AS secs FROM sessions WHERE course_id=? AND ended IS NOT NULL',(course['id'],)).fetchone()
     conn.close()
     x=row_dict(course); x['progress']=progress(x)
     x['sessions_count']=stats['cnt']; x['studied_seconds']=stats['secs']
@@ -550,10 +499,24 @@ def api_nfc_pair_start():
 def api_nfc_pair_cancel(): cancel_pairing(); return jsonify({'ok':True})
 @app.get('/health')
 def health(): return {'ok':True,'time':now_str()}
+@app.get('/health/full')
+def health_full():
+    """Deeper check (database + NFC bridge). Not used by Render's health probe on purpose."""
+    try:
+        conn=db(); conn.execute('SELECT 1').fetchone(); conn.close(); db_ok=True
+    except Exception as e:
+        db_ok=False; log.warning('db health failed: %s',e)
+    st=get_nfc_state()
+    return jsonify({'ok':db_ok,'database':database.describe().split(' (')[0],'nfc_mode':NFC_MODE,'nfc_status':st.get('status'),'bridge':st.get('bridge'),'time':now_str()}),(200 if db_ok else 503)
 
 init_db()
+log.info('StudyToken started: db=%s nfc_mode=%s base_url=%s auth=%s',database.describe(),NFC_MODE,get_nfc_base_url(),'on' if os.environ.get('APP_PASSWORD') else 'OFF (open)')
+if NFC_MODE=='bridge':
+    if not os.environ.get('BRIDGE_TOKEN'): log.warning('BRIDGE_TOKEN is not set: the Local NFC Bridge cannot connect')
+    if get_nfc_base_url().startswith('http://') and 'localhost' not in get_nfc_base_url() and '127.0.0.1' not in get_nfc_base_url():
+        log.warning('BASE_URL is not https: phones need a public HTTPS URL written to the tag')
 if __name__=='__main__':
     host=os.environ.get('HOST','0.0.0.0'); port=int(os.environ.get('PORT','5000')); base_url=get_nfc_base_url(port)
     if start_nfc_reader: start_nfc_reader(base_url)
-    threading.Thread(target=lambda: (_time.sleep(1.2), webbrowser.open(f'{base_url}/desktop')),daemon=True).start()
+    if NFC_MODE=='local': threading.Thread(target=lambda: (_time.sleep(1.2), webbrowser.open(f'{base_url}/desktop')),daemon=True).start()
     app.run(host=host,port=port,debug=False)

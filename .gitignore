@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
-data/*.db
-data/*.db-*
 .venv/
+venv/
+data/
+*.db
+*.db-journal
 .env
+local_bridge/bridge.env
+local_bridge/bridge.log*
+local_bridge/.venv/
+*.bak

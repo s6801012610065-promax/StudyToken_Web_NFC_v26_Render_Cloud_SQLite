@@ -1,0 +1,4 @@
+requests>=2.31
+nfcpy>=1.0.4
+ndeflib>=0.3.3
+pyserial>=3.5

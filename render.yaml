@@ -1,11 +1,36 @@
+# Render Blueprint - New > Blueprint > pick this GitHub repo.
+databases:
+  - name: studytoken-db
+    databaseName: studytoken
+    user: studytoken
+    region: singapore            # nearest to Thailand; must equal the web service region
+    plan: free                   # !! Free Postgres EXPIRES after 30 days (14 days grace). For permanent data change to a paid plan
+                                 #    (e.g. basic-256mb) in the Render dashboard, or run `python migrate_db.py export` regularly.
+    postgresMajorVersion: "16"
+
 services:
   - type: web
-    name: studytoken
+    name: studytoken-web
     runtime: python
-    plan: free
+    region: singapore
+    plan: free                   # free = sleeps after 15 min without traffic; the running bridge keeps sending requests.
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4
+    startCommand: gunicorn -c gunicorn.conf.py app:app
     healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.3
+        value: 3.12.8
+      - key: NFC_MODE
+        value: bridge
+      - key: DATABASE_URL
+        fromDatabase:
+          name: studytoken-db
+          property: connectionString
+      - key: BRIDGE_TOKEN          # shared secret for the Local NFC Bridge (copy it into bridge.env)
+        generateValue: true
+      - key: APP_PASSWORD          # Basic-auth password for Dashboard/Courses/History (user: studytoken). Delete the variable to disable.
+        generateValue: true
+      - key: SECRET_KEY
+        generateValue: true
+      # BASE_URL is optional: Render provides RENDER_EXTERNAL_URL automatically. Set BASE_URL only for a custom domain.
