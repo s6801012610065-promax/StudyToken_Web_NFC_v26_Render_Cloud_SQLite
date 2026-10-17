@@ -55,7 +55,7 @@
 3. รอ build เสร็จ (สถานะ *Live*) แล้วเปิด URL ที่ Render ให้ เช่น `https://studytoken-web-xxxx.onrender.com`
 4. เปิด **studytoken-web → Environment** แล้วจดค่า:
    - `BRIDGE_TOKEN` → ใส่ใน `bridge.env` ของ Bridge (หัวข้อ 5)
-   - `APP_PASSWORD` → รหัสผ่านเข้า Dashboard (username = `studytoken`) ลบตัวแปรนี้ถ้าไม่ต้องการล็อกอิน (ไม่แนะนำเมื่อเปิดสาธารณะ)
+   - (ไม่ต้องตั้ง `APP_PASSWORD` ถ้าไม่ต้องการล็อกอิน — ไม่แนะนำเมื่อเปิดสาธารณะ)
 5. ตรวจ: เปิด `https://<url>/health` ต้องได้ `{"ok":true,...}` และ `https://<url>/health/full` ต้องได้ `"ok":true`
 
 > หากใช้โดเมนของตัวเอง ให้ตั้ง `BASE_URL=https://โดเมนของคุณ` (และใส่โดเมนนั้นใน `ALLOWED_WRITE_HOSTS` ของ `bridge.env`)
@@ -68,9 +68,7 @@
 
 ## 5. ติดตั้ง Local NFC Bridge บน Windows
 
-ต้องมี Python 3.10+ (ติ๊ก *Add Python to PATH*) และ PN532 แบบ **UART/HSU ผ่าน USB-Serial** (CH340/CP210x/FTDI) — ตั้งสวิตช์บนบอร์ดเป็นโหมด HSU
-
-**v27.1:** Bridge ใช้ไดรเวอร์ PN532 ของตัวเอง (`pn532_raw.py`) แทน `nfcpy` เป็นค่าเริ่มต้น → ได้ **UID ทันทีจากชิป** ไม่ต้องรอให้ parse NDEF ได้ จึงอ่าน **NTAG213/215/216** (UID 7 ไบต์) และ Tag ที่ยังว่างได้ และเขียน URL ลง NTAG ได้โดยตรง (ตรวจอ่านกลับหลังเขียน) ถ้าต้องการแบบเดิมตั้ง `READER_BACKEND=nfcpy` (หรือ `auto` = ลองไดรเวอร์ใหม่ก่อน)
+ต้องมี Python 3.10+ (ติ๊ก *Add Python to PATH*) และ PN532 ที่ใช้งานได้กับ `nfcpy` อยู่แล้ว (แบบเดียวกับที่ใช้กับ v26: `com:COMx:pn532`)
 
 1. คัดลอกโฟลเดอร์ `local_bridge/` ไปไว้บน PC ที่ต่อ PN532 (หรือ clone repo)
 2. คัดลอก `bridge.env.example` เป็น `bridge.env` แล้วแก้:
@@ -87,8 +85,6 @@
 อยากให้รันตอนเปิดเครื่อง: ใช้ Windows **Task Scheduler** → Create Task → Trigger *At log on* → Action เปิด `run_bridge.bat`
 
 ## 6. ใช้งาน NFC (เหมือนเดิม)
-
-รองรับ Tag: **NTAG213 / NTAG215 / NTAG216** (เขียน URL ได้) — Tag อื่น (เช่น MIFARE Classic) อ่าน UID ได้แต่เขียน URL ไม่ได้
 
 1. Add Course → กรอกข้อมูล → **Generate NFC Token**
 2. (ทางเลือก) กด **Scan NFC** แล้วแตะ Tag บน PN532 → ได้ UID จริง
@@ -174,9 +170,7 @@
 | Bridge log: `BAD_SIGNATURE` | `BRIDGE_TOKEN` ใน `bridge.env` ไม่ตรงกับ Render |
 | Bridge log: `CLOCK_SKEW` | นาฬิกา Windows เพี้ยน → Settings > Time > Sync now |
 | `BRIDGE_ALREADY_CONNECTED` | มี Bridge อีกตัว/อีกหน้าต่างทำงานอยู่ (รอ ~45 วินาที หรือปิดตัวเดิม) |
-| `WAITING FOR NFC READER` | Bridge ไม่เจอ PN532: ตรวจสาย/COM, ปิดโปรแกรมที่จับพอร์ต, ลอง `COM_PORT=COM3` (ข้อความ error ใต้สถานะบอกเหตุผลของแต่ละพอร์ต) |
-| READY แต่แตะแล้วไม่มี UID | รัน `check_reader.bat` แล้วส่งผลให้ดู; ดู `local_bridge/bridge.log` ว่ามีบรรทัด `tag 04:..` ไหม; ตรวจว่า Tag แตะตรงเสาอากาศ PN532 และไม่มีโลหะรองอยู่ (NTAG ติดสติกเกอร์บนโลหะจะอ่านไม่ได้) |
-| `no ACK from PN532` | บอร์ดไม่ได้อยู่โหมด UART/HSU (ปรับสวิตช์ SEL0/SEL1), baud ไม่ตรง (`BAUD=` ใน bridge.env), หรือสลับสาย TX/RX |
+| `WAITING FOR NFC READER` | Bridge ไม่เจอ PN532: ตรวจสาย/COM, ปิดโปรแกรมที่จับพอร์ต, ลอง `COM_PORT=COM3` |
 | เขียนแล้ว `URL host not allowed` | `BASE_URL` เป็นโดเมนอื่น → ใส่ใน `ALLOWED_WRITE_HOSTS` |
 | `NFC LIBRARY NOT INSTALLED` | `pip install -r local_bridge/requirements.txt` ใน venv ของ Bridge |
 | เข้าเว็บครั้งแรกช้า ~1 นาที | Free plan ตื่นจาก sleep |
