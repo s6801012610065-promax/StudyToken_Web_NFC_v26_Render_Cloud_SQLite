@@ -29,8 +29,6 @@ services:
           property: connectionString
       - key: BRIDGE_TOKEN          # shared secret for the Local NFC Bridge (copy it into bridge.env)
         generateValue: true
-      - key: APP_PASSWORD          # Basic-auth password for Dashboard/Courses/History (user: studytoken). Delete the variable to disable.
-        generateValue: true
       - key: SECRET_KEY
         generateValue: true
       # BASE_URL is optional: Render provides RENDER_EXTERNAL_URL automatically. Set BASE_URL only for a custom domain.
