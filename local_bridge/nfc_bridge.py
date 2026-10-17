@@ -19,8 +19,9 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_protocol as proto
 from bridge_reader import Pn532Reader, SimulatedReader
+import pn532_raw as raw
 
-VERSION = '1.0'
+VERSION = '1.1'
 log = logging.getLogger('bridge')
 TOKEN_URL_RE = re.compile(r'^https?://[^/\s]+/nfc/STK-[0-9A-F]{8}$')
 
@@ -62,7 +63,7 @@ class Bridge:
         self.pairing = False
         Reader = SimulatedReader if cfg.get('simulate') else Pn532Reader
         kw = ({'taps_file': cfg.get('sim_taps'), 'tags_dir': cfg.get('sim_tags'), 'fail_writes': bool(cfg.get('sim_fail_writes'))}
-              if cfg.get('simulate') else {'com_port': cfg.get('com_port', 'auto')})
+              if cfg.get('simulate') else {'com_port': cfg.get('com_port', 'auto'), 'backend': cfg.get('backend', 'raw'), 'baud': cfg.get('baud', 115200)})
         self.reader = Reader(self._on_tag, self._on_state, self._on_write_result, **kw)
 
     # ------------------------------------------------------------- HTTP
@@ -162,9 +163,11 @@ class Bridge:
 
     def _apply(self, d):
         self.version = d['version']
-        self.pairing = bool(d.get('pairing'))
+        was_pairing, self.pairing = self.pairing, bool(d.get('pairing'))
         if self.pairing:
             self.last_tag.update(uid=None, time=0.0)
+            if not was_pairing:
+                self.reader.rescan()                # a tag already resting on the reader is reported again
         w = d.get('write')
         if w and w['request_id'] not in self.done_writes:
             bad = self._valid_write(w)
@@ -215,23 +218,68 @@ class Bridge:
         log.info('bridge stopped')
 
 
-def check_reader(com_port):
-    """Local hardware self-test: opens the PN532, waits for a tag, prints UID + NDEF. No server involved."""
+def check_reader(com_port, baud=115200, backend='raw'):
+    """Local hardware self-test (no server): probes every serial port, opens the PN532, waits for a tag and
+    prints UID, tag type and the NDEF URL stored on it."""
+    if backend == 'nfcpy':
+        return check_reader_nfcpy(com_port)
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        sys.exit('pyserial is not installed: pip install -r requirements.txt')
+    ports = raw.candidate_ports(com_port)
+    print('Ports to try:', ', '.join(ports) or '(none found)')
+    pn, port, errs = raw.find_pn532(com_port, baud)
+    for p, e in errs.items():
+        print(f'  {p}: {e}')
+    if not pn:
+        bauds = [b for b in (115200, 57600, 9600, 230400) if b != baud]
+        for b in bauds:                                   # only in this diagnostic: some boards use another speed
+            pn, port, _ = raw.find_pn532(com_port, b)
+            if pn:
+                print(f'*** PN532 answered at {b} baud on {port}. Set BAUD={b} in bridge.env ***'); baud = b; break
+    if not pn:
+        sys.exit('\nNo PN532 answered on any port.\n'
+                 ' - Is the board in UART/HSU mode? (DIP switches: SEL0=OFF SEL1=OFF for HSU on the Elechouse/Keyestudio boards)\n'
+                 ' - Is the USB-serial driver installed (CH340/CP210x) and is the COM port visible in Device Manager?\n'
+                 ' - Close every other program that uses the port (old StudyToken, Arduino IDE, PuTTY).\n'
+                 ' - Swap TX/RX if you wired the board yourself. Try COM_PORT=COMx in bridge.env.')
+    print(f'PN532 firmware {pn.firmware} opened on {port} @ {baud} baud. Present a tag (30 s)...')
+    t0, last = time.time(), None
+    try:
+        while time.time() - t0 < 30:
+            t = pn.list_passive()
+            if not t:
+                last = None; time.sleep(0.05); continue
+            uid = raw.uid_str(t['uid'])
+            if uid == last:
+                time.sleep(0.2); continue
+            last = uid
+            print('UID :', uid, f"({len(t['uid'])} bytes)  ATQA={t['atqa'].hex()} SAK=0x{t['sak']:02X}")
+            print('Type:', raw.describe_tag(pn, t))
+            if raw.is_type2(t):
+                try: print('NDEF URL:', raw.t2_read_url(pn) or '(none)')
+                except raw.Pn532Error as e: print('NDEF: cannot read:', e)
+            pn.release()
+        print('Done.')
+    finally:
+        pn.close()
+
+
+def check_reader_nfcpy(com_port):
     try:
         import nfc
     except ImportError:
         sys.exit('nfcpy is not installed: pip install nfcpy')
-    r = Pn532Reader(lambda u: None, lambda *a: None, lambda *a: None, com_port=com_port)
+    r = Pn532Reader(lambda u: None, lambda *a: None, lambda *a: None, com_port=com_port, backend='nfcpy')
     clf, port = r._find(nfc)
     if not clf:
-        sys.exit('No PN532 found. Check USB/COM port, close other programs using the port, and wiring/HSU mode.')
-    print(f'PN532 opened on {port}. Present a tag (30 s)...')
+        sys.exit('No PN532 found via nfcpy.')
+    print(f'PN532 opened on {port} (nfcpy). Present a tag (30 s)...')
     def on_connect(tag):
         print('UID :', tag.identifier.hex(':').upper()); print('Type:', tag)
         if tag.ndef:
             print('NDEF:', [str(x) for x in tag.ndef.records] or '(empty)')
-        else:
-            print('NDEF: not formatted / unsupported')
         return False
     t0 = time.time()
     clf.connect(rdwr={'on-connect': on_connect}, terminate=lambda: time.time() - t0 > 30)
@@ -245,11 +293,12 @@ def main():
     ap.add_argument('--server'); ap.add_argument('--token'); ap.add_argument('--port', help='COM port or auto')
     ap.add_argument('--list-ports', action='store_true'); ap.add_argument('--check-reader', action='store_true')
     ap.add_argument('--allow-insecure-http', action='store_true', help='allow http:// to a non-local server (testing only)')
+    ap.add_argument('--backend', choices=['raw', 'nfcpy', 'auto']); ap.add_argument('--baud', type=int)
     ap.add_argument('--simulate', action='store_true', help='NO HARDWARE: simulated reader for tests')
     ap.add_argument('--sim-taps'); ap.add_argument('--sim-tags'); ap.add_argument('--sim-fail-writes', action='store_true')
     ap.add_argument('--log-file', default=os.path.join(here, 'bridge.log'))
     a = ap.parse_args()
-    env = {**load_env_file(a.env_file), **{k: v for k, v in os.environ.items() if k.startswith(('SERVER_URL', 'BRIDGE_', 'COM_PORT', 'ALLOWED_'))}}
+    env = {**load_env_file(a.env_file), **{k: v for k, v in os.environ.items() if k.startswith(('SERVER_URL', 'BRIDGE_', 'COM_PORT', 'ALLOWED_', 'READER_BACKEND', 'BAUD'))}}
     handlers = [logging.StreamHandler()]
     try: handlers.append(logging.handlers.RotatingFileHandler(a.log_file, maxBytes=1_000_000, backupCount=3, encoding='utf-8'))
     except OSError: pass
@@ -258,12 +307,14 @@ def main():
     if a.list_ports:
         try:
             from serial.tools import list_ports
-            for p in list_ports.comports(): print(p.device, '-', p.description)
+            for p in list_ports.comports(): print(p.device, '-', p.description, f'[VID:PID={p.vid:04X}:{p.pid:04X}]' if p.vid else '')
         except ImportError: print('pyserial missing')
         return
     com = a.port or env.get('COM_PORT', 'auto')
+    backend = (a.backend or env.get('READER_BACKEND') or 'raw').lower()
+    baud = a.baud or int(env.get('BAUD') or 115200)
     if a.check_reader:
-        return check_reader(com)
+        return check_reader(com, baud, backend)
     server = (a.server or env.get('SERVER_URL', '')).strip()
     token = (a.token or env.get('BRIDGE_TOKEN', '')).strip()
     if not server or len(token) < 24:
@@ -273,13 +324,13 @@ def main():
         sys.exit('Refusing plain http:// to a remote server. Use the https:// Render URL.')
     if a.simulate:
         log.warning('*** SIMULATION MODE: no real PN532 is used. Never use for real tags. ***')
-    cfg = {'server': server, 'token': token, 'bridge_id': env.get('BRIDGE_ID') or socket.gethostname(), 'com_port': com,
+    cfg = {'server': server, 'token': token, 'bridge_id': env.get('BRIDGE_ID') or socket.gethostname(), 'com_port': com, 'backend': backend, 'baud': baud,
            'allowed_hosts': env.get('ALLOWED_WRITE_HOSTS'), 'simulate': a.simulate, 'sim_taps': a.sim_taps,
            'sim_tags': a.sim_tags, 'sim_fail_writes': a.sim_fail_writes}
     b = Bridge(cfg)
     signal.signal(signal.SIGINT, lambda *_: b.stop.set())
     if hasattr(signal, 'SIGTERM'): signal.signal(signal.SIGTERM, lambda *_: b.stop.set())
-    log.info('StudyToken Local NFC Bridge %s -> %s (COM: %s)', VERSION, server, com)
+    log.info('StudyToken Local NFC Bridge %s -> %s (COM: %s, backend: %s)', VERSION, server, com, backend)
     b.run()
 
 

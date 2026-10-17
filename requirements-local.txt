@@ -1,3 +1,4 @@
 # Original all-in-one mode on your own PC (PN532 read directly by the web app, SQLite)
 -r requirements.txt
+pyserial>=3.5
 nfcpy>=1.0.4
